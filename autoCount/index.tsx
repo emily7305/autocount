@@ -36,6 +36,7 @@ const settings = definePluginSettings({
 let timer: ReturnType<typeof setTimeout> | null = null;
 let channelId: string | null = null;
 let busy = false;
+let runId = 0;
 let nextAt = 0;
 let lastSent: bigint | null = null;
 let waitingOn: bigint | null = null;
@@ -47,13 +48,21 @@ function getInterval() {
     return Math.max(10, Number.isFinite(secs) ? secs : 30) * 1000;
 }
 
+function getLimit(value: number) {
+    const n = Math.floor(Number(value));
+    return Number.isSafeInteger(n) && n > 0 ? n : 0;
+}
+
 function schedule(ms: number) {
     if (timer) clearTimeout(timer);
+    // setTimeout fires right away if the delay doesn't fit in 32 bits
+    ms = Math.min(ms, 2 ** 31 - 1);
     nextAt = Date.now() + ms;
     timer = setTimeout(tick, ms);
 }
 
 function start(id: string) {
+    runId++;
     channelId = id;
     lastSent = null;
     waitingOn = null;
@@ -66,6 +75,7 @@ function start(id: string) {
 function stop(reason?: string) {
     if (timer) clearTimeout(timer);
     timer = null;
+    runId++;
     const wasRunning = channelId !== null;
     channelId = null;
     waitingOn = null;
@@ -74,24 +84,28 @@ function stop(reason?: string) {
 
 async function tick() {
     timer = null;
-    // previous request still going, it will schedule the next one itself
-    if (busy || !channelId) return;
+    if (!channelId) return;
+    // a request from an older run is still going, try again a bit later
+    if (busy) {
+        schedule(1000);
+        return;
+    }
 
     busy = true;
-    const target = channelId;
+    const run = runId;
     let delay = getInterval();
     try {
-        delay = await countOnce(target) ?? delay;
+        delay = await countOnce(channelId, run) ?? delay;
     } catch (e) {
         console.error("[AutoCount]", e);
     } finally {
         busy = false;
-        if (channelId === target) schedule(delay);
+        if (run === runId) schedule(delay);
     }
 }
 
 // returns a custom delay in ms when we have to wait longer than normal
-async function countOnce(target: string): Promise<number | void> {
+async function countOnce(target: string, run: number): Promise<number | void> {
     let res: any;
     try {
         res = await RestAPI.get({
@@ -99,13 +113,13 @@ async function countOnce(target: string): Promise<number | void> {
             query: { limit: 10 }
         });
     } catch (e: any) {
-        return handleError(e);
+        return run === runId ? handleError(e) : undefined;
     }
-    if (channelId !== target) return;
+    if (run !== runId) return;
 
     // discord returns newest first
     const msgs: any[] = Array.isArray(res?.body) ? res.body : [];
-    const latest = msgs.find(m => typeof m?.content === "string" && /^\d+$/.test(m.content.trim()));
+    const latest = msgs.find(m => typeof m?.content === "string" && /^(0|[1-9]\d*)$/.test(m.content.trim()));
     if (!latest) return;
 
     const current = BigInt(latest.content.trim());
@@ -126,23 +140,27 @@ async function countOnce(target: string): Promise<number | void> {
     if (settings.store.skipIfLastIsMe && latest.author?.id === UserStore.getCurrentUser()?.id) return;
 
     const next = current + 1n;
-    const stopAt = Math.floor(Number(settings.store.stopAtNumber) || 0);
+    const stopAt = getLimit(settings.store.stopAtNumber);
     if (stopAt > 0 && next > BigInt(stopAt)) {
         stop(`AutoCount reached ${stopAt}`);
         return;
     }
 
+    let sent: any;
     try {
-        await sendMessage(target, { content: next.toString() });
+        sent = await sendMessage(target, { content: next.toString() });
     } catch (e: any) {
-        return handleError(e);
+        return run === runId ? handleError(e) : undefined;
     }
+    if (run !== runId) return;
+    // discord sometimes resolves with the failed response instead of throwing
+    if (sent?.ok === false || sent?.status >= 400) return handleError(sent);
 
     lastSent = next;
     waitingOn = next;
     sends++;
 
-    const maxSends = Math.floor(Number(settings.store.stopAfterSends) || 0);
+    const maxSends = getLimit(settings.store.stopAfterSends);
     if (maxSends > 0 && sends >= maxSends) {
         stop(`AutoCount sent ${sends} numbers, stopping`);
     } else if (stopAt > 0 && next >= BigInt(stopAt)) {
