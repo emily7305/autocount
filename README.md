@@ -1,6 +1,9 @@
 # AutoCount
 
-AutoCount reads the latest number in a counting channel and sends the next one on a timer. I made it so I don't have to sit in our counting channels all day.
+AutoCount is a Vencord/Equicord plugin for counting channels. It reads the latest number in the channel and sends the next one on a timer, so the count keeps going without having to type every number by hand.
+
+> [!CAUTION]
+> **WARNING:** Automating a user account (self-botting) is against Discord's Terms of Service and can get your account banned. Use it at your own risk.
 
 ## Install
 
@@ -30,14 +33,10 @@ For Equicord it's the same, just put the folder in `src/equicordplugins/` instea
 ## When it stops by itself
 
 - It hits `stopAtNumber` or `stopAfterSends`.
-- Three numbers in a row get rejected, meaning the latest number is lower than the one I sent, three times in a row.
+- Three numbers in a row get rejected, meaning the latest number is lower than the one it sent, three times in a row.
 - Discord answers with a 403 or 404 for the channel.
 
 A 429 doesn't stop it. It waits for the retry time Discord gives, or double the interval if there isn't one.
-
-## A note
-
-Automating a user account (self-botting) is against Discord's Terms of Service and can get your account banned. Use it at your own risk.
 
 ## Testing
 
