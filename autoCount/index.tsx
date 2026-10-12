@@ -79,21 +79,28 @@ async function tick() {
 
     busy = true;
     const target = channelId;
+    let delay = getInterval();
     try {
-        await countOnce(target);
+        delay = await countOnce(target) ?? delay;
     } catch (e) {
         console.error("[AutoCount]", e);
     } finally {
         busy = false;
-        if (channelId === target) schedule(getInterval());
+        if (channelId === target) schedule(delay);
     }
 }
 
-async function countOnce(target: string) {
-    const res = await RestAPI.get({
-        url: Constants.Endpoints.MESSAGES(target),
-        query: { limit: 10 }
-    });
+// returns a custom delay in ms when we have to wait longer than normal
+async function countOnce(target: string): Promise<number | void> {
+    let res: any;
+    try {
+        res = await RestAPI.get({
+            url: Constants.Endpoints.MESSAGES(target),
+            query: { limit: 10 }
+        });
+    } catch (e: any) {
+        return handleError(e);
+    }
     if (channelId !== target) return;
 
     // discord returns newest first
@@ -125,7 +132,11 @@ async function countOnce(target: string) {
         return;
     }
 
-    await sendMessage(target, { content: next.toString() });
+    try {
+        await sendMessage(target, { content: next.toString() });
+    } catch (e: any) {
+        return handleError(e);
+    }
 
     lastSent = next;
     waitingOn = next;
@@ -137,6 +148,22 @@ async function countOnce(target: string) {
     } else if (stopAt > 0 && next >= BigInt(stopAt)) {
         stop(`AutoCount reached ${stopAt}`);
     }
+}
+
+function handleError(e: any) {
+    const status = e?.status;
+    if (status === 429) {
+        const retryAfter = Number(e?.body?.retry_after);
+        // retry_after is in seconds
+        return Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.max(retryAfter * 1000, getInterval())
+            : getInterval() * 2;
+    }
+    if (status === 403 || status === 404) {
+        stop(`AutoCount stopped, got ${status} from discord`);
+        return;
+    }
+    console.error("[AutoCount] request failed", e);
 }
 
 export default definePlugin({
