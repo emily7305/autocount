@@ -20,6 +20,16 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         description: "Don't send if the last number is already mine",
         default: true
+    },
+    stopAtNumber: {
+        type: OptionType.NUMBER,
+        description: "Stop once this number is reached (0 = off)",
+        default: 0
+    },
+    stopAfterSends: {
+        type: OptionType.NUMBER,
+        description: "Stop after this many sends (0 = off)",
+        default: 0
     }
 });
 
@@ -49,12 +59,12 @@ function start(id: string) {
     schedule(0);
 }
 
-function stop() {
+function stop(reason?: string) {
     if (timer) clearTimeout(timer);
     timer = null;
     const wasRunning = channelId !== null;
     channelId = null;
-    if (wasRunning) showToast("AutoCount stopped");
+    if (wasRunning) showToast(reason ?? "AutoCount stopped", reason ? "failure" : "message");
 }
 
 async function tick() {
@@ -91,12 +101,23 @@ async function countOnce(target: string) {
     if (settings.store.skipIfLastIsMe && latest.author?.id === UserStore.getCurrentUser()?.id) return;
 
     const next = current + 1n;
+    const stopAt = Math.floor(Number(settings.store.stopAtNumber) || 0);
+    if (stopAt > 0 && next > BigInt(stopAt)) {
+        stop(`AutoCount reached ${stopAt}`);
+        return;
+    }
 
     await sendMessage(target, { content: next.toString() });
 
     lastSent = next;
     sends++;
 
+    const maxSends = Math.floor(Number(settings.store.stopAfterSends) || 0);
+    if (maxSends > 0 && sends >= maxSends) {
+        stop(`AutoCount sent ${sends} numbers, stopping`);
+    } else if (stopAt > 0 && next >= BigInt(stopAt)) {
+        stop(`AutoCount reached ${stopAt}`);
+    }
 }
 
 export default definePlugin({
