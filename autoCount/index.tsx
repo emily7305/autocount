@@ -38,6 +38,8 @@ let channelId: string | null = null;
 let busy = false;
 let nextAt = 0;
 let lastSent: bigint | null = null;
+let waitingOn: bigint | null = null;
+let rejections = 0;
 let sends = 0;
 
 function getInterval() {
@@ -54,6 +56,8 @@ function schedule(ms: number) {
 function start(id: string) {
     channelId = id;
     lastSent = null;
+    waitingOn = null;
+    rejections = 0;
     sends = 0;
     showToast("AutoCount started", "success");
     schedule(0);
@@ -64,6 +68,7 @@ function stop(reason?: string) {
     timer = null;
     const wasRunning = channelId !== null;
     channelId = null;
+    waitingOn = null;
     if (wasRunning) showToast(reason ?? "AutoCount stopped", reason ? "failure" : "message");
 }
 
@@ -98,6 +103,19 @@ async function countOnce(target: string) {
 
     const current = BigInt(latest.content.trim());
 
+    if (waitingOn !== null) {
+        if (current < waitingOn) {
+            rejections++;
+            if (rejections >= 3) {
+                stop("AutoCount stopped, last 3 numbers got rejected");
+                return;
+            }
+        } else {
+            rejections = 0;
+        }
+        waitingOn = null;
+    }
+
     if (settings.store.skipIfLastIsMe && latest.author?.id === UserStore.getCurrentUser()?.id) return;
 
     const next = current + 1n;
@@ -110,6 +128,7 @@ async function countOnce(target: string) {
     await sendMessage(target, { content: next.toString() });
 
     lastSent = next;
+    waitingOn = next;
     sends++;
 
     const maxSends = Math.floor(Number(settings.store.stopAfterSends) || 0);
